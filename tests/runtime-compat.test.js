@@ -21,8 +21,8 @@ function api(manifest = currentManifest(), reply = currentReply()) {
 }
 
 test('The shared runtime contract accepts the current manifest and worker', () => {
-  assert.equal(UI_VERSION, '2.0.1');
-  assert.equal(RUNTIME_PROTOCOL, 1);
+  assert.equal(UI_VERSION, '2.1.0');
+  assert.equal(RUNTIME_PROTOCOL, 2);
   const manifest = currentManifest(), reply = currentReply();
   assert.equal(assertLoadedManifest(manifest), manifest);
   assert.equal(assertRuntimeInfo(reply), reply.runtime);

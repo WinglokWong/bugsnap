@@ -8,7 +8,8 @@ function setup({ granted = true } = {}) {
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {
       textContent: '', value: '', hidden: false, disabled: false, checked: true,
-      classList: { toggle() {}, remove() {} }, listeners: {},
+      classList: { toggle() {}, remove() {} }, listeners: {}, dataset: {},
+      setAttribute() {}, querySelectorAll() { return []; },
       addEventListener(name, fn) { this.listeners[name] = fn; },
       replaceChildren() {}, append() {}
     });
@@ -23,7 +24,7 @@ function setup({ granted = true } = {}) {
   };
   let commandError;
   const ui = setupEasyUI({
-    extension: true, getWindowId: () => 1, download() {}, notify() {},
+    extension: true, getWindowId: () => 1, download() {}, confirmDelete: async () => false,
     command: async (_, args) => {
       calls.push(['command', args.action]);
       if (commandError) throw commandError;

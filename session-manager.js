@@ -18,7 +18,7 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
     const s = await db.get(diagnosticSessionId);
     if (s?.active && s.browserId !== await browserId()) {
       s.browserId = await browserId(); s.tabIds = []; s.bindings = {}; s.status = 'waiting'; s.needsResume = true;
-      s.lastError = '浏览器或插件重新启动。旧日志已保留，点击「加入当前标签页」继续；浏览器关闭期间无法记录。'; await db.put(s);
+      s.lastError = '浏览器或插件重新启动。旧日志已保留，点击「继续记录这个网页」继续；浏览器关闭期间无法记录。'; await db.put(s);
     }
     const { diagnosticSessionFault } = await chrome.storage.local.get('diagnosticSessionFault');
     if (s && diagnosticSessionFault?.id === s.id) {
@@ -34,6 +34,10 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
     await chrome.storage.local.set({ diagnosticSessionId: s.id, diagnosticSessionStatus: { id: s.id, active: s.active, status: s.status, counts: s.counts, error: s.lastError, revision: s.revision } });
     chrome.action.setBadgeText({ text: s.active ? (['permission', 'storage-error'].includes(s.status) ? '!' : 'REC') : '' }).catch(() => {});
     if (s.active) chrome.action.setBadgeBackgroundColor({ color: '#d45172' }).catch(() => {});
+  }
+  async function publishHistoryChange() {
+    const { diagnosticHistoryRevision = 0 } = await chrome.storage.local.get('diagnosticHistoryRevision');
+    await chrome.storage.local.set({ diagnosticHistoryRevision: diagnosticHistoryRevision + 1 });
   }
   async function ensureBridge() {
     const scripts = await chrome.scripting.getRegisteredContentScripts({ ids: [SCRIPT] });
@@ -59,7 +63,7 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
       if (s.followActive && sender.tab.active && sender.tab.windowId === s.ownerWindowId) s.tabIds.push(sender.tab.id);
       else return { active: false };
     }
-    if (!(await allowed())) { s.status = 'permission'; s.lastError = '网站访问授权已被撤销。会话未停止，重新授权后可继续。'; await publish(s); return { active: false }; }
+    if (!(await allowed())) { s.status = 'permission'; s.lastError = '网站访问授权已被撤销。已有记录已保留，重新授权后可继续。'; await publish(s); return { active: false }; }
     const page = { tabId: sender.tab.id, documentId: sender.documentId, pageDocumentId: String(message.pageDocumentId).slice(0, 100), url: safePageURL(sender.url), title: String(message.title || '').slice(0, 200), time: new Date().toISOString() };
     const token = String(message.token || '').slice(0, 100); if (!token) return { active: false };
     s.bindings[sender.documentId] = { ...page, token };
@@ -152,35 +156,51 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
     let s = await currentSession();
     if (message.action === 'list') return { sessions: (await db.list()).map(x => ({ id: x.id, active: x.active, startedAt: x.startedAt, stoppedAt: x.stoppedAt, startUrl: x.startUrl, counts: x.counts })).sort((a, b) => b.startedAt.localeCompare(a.startedAt)) };
     if (message.action === 'read') return snapshot(message.sessionId ? await db.get(message.sessionId) : s, Boolean(message.full));
+    if (message.action === 'delete') {
+      if (typeof message.sessionId !== 'string' || !message.sessionId.trim()) throw new Error('请选择要删除的记录。');
+      const record = await db.get(message.sessionId);
+      if (!record) throw new Error('这条记录已不存在，请刷新列表。');
+      if (record.active) throw new Error('这条记录还在进行中，请先结束记录，再删除。');
+      await db.delete(record.id);
+      if (s?.id === record.id) {
+        await chrome.storage.local.set({ diagnosticSessionId: null, diagnosticSessionStatus: null, diagnosticSessionFault: null });
+        chrome.action.setBadgeText({ text: '' }).catch(() => {});
+      }
+      await publishHistoryChange();
+      return { deleted: true, sessionId: record.id };
+    }
     if (message.action === 'start' || message.action === 'join') {
       if (s?.status === 'stopping') throw new Error('正在结束上一次记录，请稍候。');
-      if (!(await allowed())) throw new Error('连续记录需要网站访问授权。请点击「开始持续记录」并在 Chrome 提示中确认。');
+      if (!(await allowed())) throw new Error('连续记录需要网站访问授权。请点击「开始记录」并在 Chrome 提示中确认。');
       const [tab] = await chrome.tabs.query({ active: true, windowId: message.windowId });
       if (!tab || !safePageURL(tab.url) || tab.url.startsWith('https://chromewebstore.google.com/')) throw new Error('请先打开你要反馈的网站，再点击开始记录。');
-      if (!s?.active) {
-        if (message.action === 'join') throw new Error('当前没有运行中的会话，请先开始记录。');
+      const created = !s?.active;
+      if (created) {
+        if (message.action === 'join') throw new Error('当前没有进行中的记录，请先开始记录。');
         s = newSession(tab, await browserId(), uuid());
       } else if (!s.tabIds.includes(tab.id)) s.tabIds.push(tab.id);
       s.needsResume = false;
       if (message.followActive === true) { s.followActive = true; s.ownerWindowId = message.windowId; }
       if (typeof message.screenshots === 'boolean') s.screenshots = message.screenshots;
       await ensureBridge(); await publish(s);
+      if (created) await publishHistoryChange();
       try { await poke(tab.id); } catch (error) { s.status = 'waiting'; s.lastError = `此页暂未接入：${error.message}`; await publish(s); }
       return snapshot(s, false);
     }
-    if (!s) throw new Error('尚未创建测试会话。');
+    if (!s) throw new Error('还没有开始记录。');
     if (message.action === 'clear' && message.sessionId && message.sessionId !== s.id) {
       const archived = await db.get(message.sessionId);
       if (!archived || archived.active) throw new Error('无法清空这份历史会话。');
       archived.counts = emptyCounts(); archived.losses = emptyCounts(); archived.lastError = ''; archived.clearedAt = new Date().toISOString();
       await db.clear(archived); return snapshot(archived, false);
     }
-    if (message.sessionId && message.sessionId !== s.id) throw new Error('会话已变化，请刷新会话再操作。');
+    if (message.sessionId && message.sessionId !== s.id) throw new Error('当前记录已变化，请重新打开插件再操作。');
     if (message.action === 'stop') {
       if (!s.active) return snapshot(s, false);
       if (s.active && s.screenshots) await captureEvidence(s, message.windowId, '结束记录');
       if (typeof message.note === 'string') s.note = redactText(message.note, 3000);
       s.active = false; s.stoppedAt = new Date().toISOString(); s.status = 'stopped'; s.lastError = ''; await publish(s);
+      await publishHistoryChange();
       await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT] }).catch(() => {});
       return snapshot(s, false);
     }
@@ -188,7 +208,7 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
     if (message.action === 'mark' || message.action === 'evidence') {
       if (!s.active || s.status === 'stopping') throw new Error('请先开始记录。');
       const [tab] = await chrome.tabs.query({ active: true, windowId: message.windowId });
-      if (!tab || !safePageURL(tab.url) || !s.tabIds.includes(tab.id)) throw new Error('当前网页没有在本次记录中，请先点击「记录这个网页」。');
+      if (!tab || !safePageURL(tab.url) || !s.tabIds.includes(tab.id)) throw new Error('当前网页没有在本次记录中，请先点击「继续记录这个网页」。');
       if (message.action === 'mark') await writeTrusted(s, 'markers', tab, { kind: 'problem', message: '用户在这里遇到了问题', note: redactText(message.note, 1000) });
       const evidence = s.screenshots ? await captureEvidence(s, message.windowId, message.action === 'mark' ? '问题发生时的画面' : '开始记录') : { saved: false, reason: '未开启画面保存' };
       await publish(s); return { ...(await snapshot(s, false)), evidence };
@@ -209,10 +229,6 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
     },
     hello: (message, sender) => serial(() => hello(message, sender)),
     append: (message, sender) => serial(() => append(message, sender)),
-    forCapture: (tabId, pageDocumentId) => serial(async () => {
-      const s = await currentSession(); if (!s || !s.pages.some(p => p.tabId === tabId && p.pageDocumentId === pageDocumentId)) return null;
-      return (await snapshot(s, false)).diagnostics;
-    }),
     install() {
       chrome.tabs.onActivated?.addListener(info => serial(async () => {
         const s = await currentSession(); if (!s?.active || s.needsResume || s.status === 'stopping' || !s.followActive || s.ownerWindowId !== info.windowId) return;
@@ -223,7 +239,7 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
       }).catch(console.error));
       chrome.permissions.onRemoved?.addListener(() => serial(async () => {
         const s = await currentSession(); if (!s?.active || await allowed()) return;
-        s.status = 'permission'; s.lastError = '网站权限已撤销，采集暂停。会话及已保存日志仍保留；重新授权后可继续。'; await publish(s);
+        s.status = 'permission'; s.lastError = '网站权限已撤销，记录已暂停。已有内容仍保留，重新授权后可继续。'; await publish(s);
         await Promise.allSettled(s.tabIds.map(tabId => chrome.tabs.sendMessage(tabId, { type: 'SESSION_STOP' })));
       }).catch(console.error));
       chrome.tabs.onCreated.addListener(tab => { if (tab.openerTabId != null) serial(async () => {
@@ -238,7 +254,7 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
           else return;
         }
         s.status = change.status === 'loading' ? 'connecting' : 'recording';
-        if (!safePageURL(tab.url) || tab.url?.startsWith('https://chromewebstore.google.com/')) { s.status = 'waiting'; s.lastError = '此标签页进入受限制或未授权页面。会话保持开启，返回已授权网页后继续。'; }
+        if (!safePageURL(tab.url) || tab.url?.startsWith('https://chromewebstore.google.com/')) { s.status = 'waiting'; s.lastError = '这个页面暂时无法记录。已有内容已保留，返回已授权的网站后继续。'; }
         await publish(s);
         if (change.status === 'complete' && safePageURL(tab.url)) {
           try { await poke(tabId); }
@@ -248,7 +264,7 @@ export function createSessionManager(chrome, db = sessionDB, uuid = () => crypto
       chrome.tabs.onRemoved.addListener(tabId => serial(async () => {
         const s = await currentSession(); if (!s?.active || s.status === 'stopping' || !s.tabIds.includes(tabId)) return;
         s.tabIds = s.tabIds.filter(id => id !== tabId);
-        if (!s.tabIds.length) { s.status = 'waiting'; s.lastError = '所有跟踪标签页已关闭；会话仍开启，加入当前标签页即可继续。'; }
+        if (!s.tabIds.length) { s.status = 'waiting'; s.lastError = '正在记录的网页都已关闭。打开要反馈的网站，点击「继续记录这个网页」。'; }
         await publish(s);
       }).catch(console.error));
     }

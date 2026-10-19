@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BugSnap 历史删除 · IndexedDB 测试</title>
+  <style>
+    body { font: 15px/1.7 system-ui; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #322c40; background: #f7f5fb; }
+    h1 { font-size: 26px; } p { color: #72677f; }
+    li { background: white; border: 1px solid #e7deef; border-radius: 10px; margin: 10px 0; padding: 12px 16px; }
+    .pass { color: #287658; } .fail { color: #b13451; }
+    #progress { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>历史删除 · 真实 IndexedDB 测试</h1>
+  <p>本页仅创建和访问随机 UUID 前缀的合成记录，结束后清理本次测试数据。不读取用户历史、不清空数据库。</p>
+  <ol id="results"></ol>
+  <p id="progress" role="status">正在运行…</p>
+  <script type="module" src="history-db-browser.js"></script>
+</body>
+</html>

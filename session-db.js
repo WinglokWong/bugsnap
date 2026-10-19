@@ -58,5 +58,25 @@ export const sessionDB = {
       cursor.onsuccess = () => { const c = cursor.result; if (c) { c.delete(); c.continue(); } };
       tx.objectStore('sessions').put(session); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
     });
+  },
+  async delete(id) {
+    const db = await database(); return new Promise((resolve, reject) => {
+      // Keep the record and all of its evidence in one transaction so deletion cannot leave orphaned screenshots.
+      const tx = db.transaction(['sessions', 'events'], 'readwrite'), sessions = tx.objectStore('sessions');
+      let failure;
+      const lookup = sessions.get(id);
+      lookup.onsuccess = () => {
+        if (!lookup.result || lookup.result.active) {
+          failure = new Error(lookup.result ? '这条记录还在进行中，请先结束记录，再删除。' : '这条记录已不存在，请刷新列表。');
+          tx.abort(); return;
+        }
+        const cursor = tx.objectStore('events').index('sessionId').openCursor(id);
+        cursor.onsuccess = () => { const entry = cursor.result; if (entry) { entry.delete(); entry.continue(); } };
+        sessions.delete(id);
+      };
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(failure || tx.error || new Error('删除未完成，请重试。'));
+      tx.onabort = () => reject(failure || tx.error || new Error('删除未完成，请重试。'));
+    });
   }
 };

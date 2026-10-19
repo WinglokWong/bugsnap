@@ -1,7 +1,7 @@
 // The UI and service worker share this contract. A loaded unpacked extension
 // keeps its old manifest until Chrome reloads it, even if its files are replaced.
-export const UI_VERSION = '2.0.1';
-export const RUNTIME_PROTOCOL = 1;
+export const UI_VERSION = '2.1.0';
+export const RUNTIME_PROTOCOL = 2;
 export const RELOAD_MESSAGE = '插件界面和后台版本不一致。点击“重新加载插件”，再从工具栏打开 BugSnap。';
 
 export class RuntimeCompatibilityError extends Error {

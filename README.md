@@ -9,12 +9,12 @@ BugSnap is a Chrome Manifest V3 extension for collecting user actions, visible p
 > The current extension interface is in Simplified Chinese. This README provides English installation and usage instructions.
 
 <p align="center">
-  <a href="docs/simple-mode.jpg">
-    <img src="docs/simple-mode.jpg" alt="BugSnap simple mode — complete sidebar preview" width="480">
+  <a href="docs/history.jpg">
+    <img src="docs/history.jpg" alt="BugSnap history — date search and per-record actions" width="800">
   </a>
 </p>
 
-<p align="center"><em>Complete simple-mode preview. Click the image to view it at full size.</em></p>
+<p align="center"><em>History search and record management, shown with synthetic example records. Click to view at full size.</em></p>
 
 ## Three steps for users
 
@@ -33,13 +33,15 @@ The corresponding interface labels are:
 | Finish and export | 结束并导出 |
 | Download again | 再次下载记录 |
 | Previous recordings | 以前的记录 |
-| Advanced tools | 高级工具 |
+| Search by date | 按日期查找 |
+| Show all records | 显示全部 |
+| Delete a recording | 删除 |
 
 ## Install
 
 Requires **Chrome 116 or newer**. The release is an unpacked extension package, not a Chrome Web Store installation.
 
-1. Download `BugSnap-v2.0.1.zip` from [Releases](https://github.com/WinglokWong/bugsnap/releases).
+1. Download `BugSnap-v2.1.0.zip` from [Releases](https://github.com/WinglokWong/bugsnap/releases).
 2. Extract the ZIP.
 3. Open `chrome://extensions` in Chrome and enable **Developer mode**.
 4. Click **Load unpacked** and select the extracted `bugsnap` folder containing `manifest.json`.
@@ -112,8 +114,7 @@ Raw field values are excluded from action events. Sensitive controls receive gen
 | `activeTab` | Temporary access for toolbar-triggered capture workflows |
 | `scripting` | Inject the element picker and recording collectors |
 | `sidePanel` | Display the extension interface |
-| `storage` | Persist control state and exchange capture results |
-| `clipboardWrite` | Copy an advanced report |
+| `storage` | Persist recording control state and synchronize history changes |
 | Optional HTTP/HTTPS host access | Continue recording on authorized websites |
 | Optional `<all_urls>` host access | Requested when simple-mode screenshot capture is enabled |
 
@@ -121,23 +122,24 @@ Optional access is requested when a user starts recording. Stopping collection d
 
 The extension does **not** read request bodies, response bodies, request headers, or cookies. Ordinary `console.log` and `console.warn` output is not collected. It does not request `debugger` or `webRequest` permissions.
 
-## Advanced tools
+## Find and manage previous recordings
 
-The advanced interface retains:
+Open **以前的记录** (Previous recordings) to browse saved recordings:
 
-- Element selection and CSS selector extraction.
-- Visible-area screenshots with rectangle, arrow, and text annotations.
-- Manual issue reports, local history, severity filtering, and page grouping.
-- Markdown, JSON, and HTML exports and clipboard copying.
-- Screenshot comparison with tolerance controls, a difference image, and a sliding comparison.
+- Each page contains up to **10 records**, newest first.
+- Search by the recording's start date in your browser's local time. Enter `2026`, `2026-10`, or `2026-10-19` to find a year, month, or day. Slash and Chinese date separators are also accepted.
+- Use **上一页 / 下一页** (Previous / Next), or enter a page number and click **跳转** (Go).
+- Click **下载记录** (Download recording) to export any saved recording.
+- Click **删除** (Delete) and confirm the displayed date to remove that recording and its stored events, screenshots, and notes. Downloaded files are not affected. Finish an active recording before deleting it.
+- Deleting the last record on a page automatically moves to the previous available page. Other recordings are retained.
 
-Screenshot comparison requires matching original image dimensions. Large images are downscaled for analysis. Pixel differences are observations, not automatic defect detection.
+Version 2.1 focuses entirely on recording and sharing. The former advanced element picker, manual issue form, annotation tools, and screenshot comparison interface have been removed. Updating does not erase stored recordings. Legacy manual-report storage is left untouched, but is no longer exposed in this interface.
 
 ## Known limitations
 
 - This is an evidence timeline, **not a screen recording or a complete session-replay engine**.
 - Custom components, complex Shadow DOM, cross-origin frames, canvas internals, and arbitrary visual changes may not be captured fully.
-- Page collectors do not cover browser UI, internal Chrome pages, the Chrome Web Store, or Worker internals. Continuous recording targets ordinary HTTP/HTTPS pages; advanced local-file capture additionally requires Chrome's file-access setting.
+- Page collectors do not cover browser UI, internal Chrome pages, the Chrome Web Store, or Worker internals. Continuous recording targets ordinary HTTP/HTTPS pages.
 - Very early events before a new document connects, or events during crashes and page teardown, may be missed.
 - CSP restrictions, cached native function references, frozen APIs, or page modifications can affect coverage.
 - Screenshots are compressed. A recording allows up to 12 automatic screenshot attempts. Failed captures or the limit do not discard text events or problem markers.
@@ -177,10 +179,10 @@ python3 -m http.server 8765 --bind 127.0.0.1
 | --- | --- |
 | `/sidepanel.html` | Interface preview with clearly labeled demo data |
 | `/test-page.html` | Manual test page for the installed extension |
-| `/tests/browser.html` | Element-selection DOM checks |
-| `/tests/features.html` | Diagnostics, Worker, and HTML checks |
 | `/tests/interaction-browser.html` | Action, feedback, and privacy checks |
 | `/tests/session-browser.html` | Cross-origin navigation, persistence, and stop behavior |
+| `/tests/history-db-browser.html` | Atomic deletion of synthetic recordings using real IndexedDB |
+| `/tests/history-preview.html` | Pagination and search using synthetic UI records |
 
 Open these under `http://127.0.0.1:8765`. The continuous-session fixture uses both `127.0.0.1` and `localhost` on port 8765 to exercise navigation between origins.
 
@@ -195,7 +197,7 @@ npm run build
 Outputs:
 
 ```text
-dist/BugSnap-v2.0.1.zip
+dist/BugSnap-v2.1.0.zip
 dist/SHA256SUMS
 ```
 
@@ -213,23 +215,23 @@ sha256sum -c SHA256SUMS
 
 ### Validation status
 
-The v2 implementation has passed 59 logical tests, nine action/privacy browser checks, and six continuous-session browser checks. The simple start/mark/finish workflow and an exported ZIP's HTML, JSON, and image files were also checked.
+Validation for 2.1.0: 72 automated tests passed, along with six real IndexedDB deletion/rollback browser checks. A 31-record browser fixture verified page navigation, date search, and deletion fallback; a 320-pixel iframe verified the narrow sidebar layout. The installed Chrome extension was reloaded and its three existing recordings were retained.
 
-Some browser fixtures use adapters for Chrome extension APIs. These checks do not establish complete compatibility with every website or replace installed-extension acceptance testing. The v2 permission flow and target-site behavior still require that acceptance testing.
+The automated suite covers recording continuity, error and request capture, event filtering, ZIP exports, startup compatibility, history date filtering and pagination, and deletion boundaries. Browser checks use local test pages and synthetic records. The 2.0.1 installed-extension checks also exercised the permission flow and cross-origin recording with exported screenshots.
+
+These checks do not establish compatibility with every website. Validate the extension on your intended business websites before distributing it to end users.
 
 ## Project structure
 
 | Files | Responsibility |
 | --- | --- |
 | `manifest.json`, `background.js` | Extension entry points and orchestration |
-| `easy-ui.js`, `sidepanel.html`, `styles.css` | Simple user experience |
-| `app.js`, `collector.js` | Advanced tools and element selection |
+| `app.js`, `easy-ui.js`, `sidepanel.html`, `styles.css` | User interface, startup checks, and recording controls |
+| `history-ui.js`, `history-model.js` | Date search, pagination, downloads, and deletion |
 | `interaction-recorder.js`, `diagnostics.js` | Main-world action, feedback, and diagnostic collection |
 | `diagnostic-bridge.js` | Isolated-world event bridge |
 | `event-schema.js` | Event allowlist and text filtering |
 | `session-manager.js`, `session-model.js`, `session-db.js` | Persistent sessions and event storage |
-| `recording-report.js`, `report.js` | Recording packages and advanced exports |
-| `compare.js`, `comparison-ui.js`, `diff-worker.js` | Screenshot comparisons |
-| `store.js` | Local reports and drafts |
+| `recording-report.js`, `report.js` | Readable recording timeline, JSON, and ZIP utilities |
 | `tests/` | Automated and browser test fixtures |
 | `scripts/package.py` | Reproducible release packaging |

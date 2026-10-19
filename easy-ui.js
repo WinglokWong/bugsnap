@@ -1,11 +1,14 @@
 import { recordingFiles } from './recording-report.js';
 import { zip } from './report.js';
+import { setupHistoryUI } from './history-ui.js';
+import { localDateKey } from './history-model.js';
 import { permissionOrigins, runtimeProblem } from './runtime-compat.js';
 const $ = id => document.getElementById(id);
 const names = { actions: '操作', feedback: '页面提示', navigation: '打开网页', network: '请求结果', requests: '请求失败', errors: '系统异常', markers: '问题标记', evidence: '画面' };
-export function setupEasyUI({ extension, command, download, notify, getWindowId, onRuntimeError }) {
+export function setupEasyUI({ extension, command, download, confirmDelete, getWindowId, onRuntimeError }) {
   let ready = false, unavailable = null;
-  let session = null, running = false, busy = false, refreshTimer, noteTimer, demo = null, noteDraft = '', noteSessionId = null, noteDirty = false;
+  let session = null, running = false, busy = false, refreshTimer, historyTimer, noteTimer, demo = null, noteDraft = '', noteSessionId = null, noteDirty = false;
+  const demos = [];
   function message(text, error = false) { $('easy-message').textContent = text; $('easy-message').classList.toggle('error', error); $('easy-message').hidden = !text; }
   function render() {
     running = Boolean(session?.active);
@@ -46,7 +49,7 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId,
     }
     $('easy-recent').hidden = !recent.length;
     $('easy-history').disabled = !ready || busy;
-    $('show-advanced').disabled = !ready;
+    historyUI.setEnabled(ready && !busy);
   }
   async function refresh() {
     if (extension) session = (await command('DIAGNOSTICS', { action: 'read' })).diagnostics;
@@ -55,18 +58,32 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId,
     else if (!noteDirty) noteDraft = session?.note || '';
     render();
   }
-  async function history() {
-    if (!extension) return;
-    const { sessions } = await command('DIAGNOSTICS', { action: 'list' });
-    $('easy-history-list').replaceChildren();
-    for (const item of sessions.slice(0, 20)) {
-      const row = document.createElement('div'), label = document.createElement('span'), button = document.createElement('button');
-      label.textContent = `${new Date(item.startedAt).toLocaleString('zh-CN')} · ${item.active ? '记录中' : '已结束'}`; button.textContent = '下载记录';
-      button.addEventListener('click', () => run(async () => { const data = await command('DIAGNOSTICS', { action: 'read', sessionId: item.id, full: true }); exportSession(data.diagnostics); }));
-      row.append(label, button); $('easy-history-list').append(row);
-    }
-    if (!sessions.length) $('easy-history-list').textContent = '保存后的记录会出现在这里。';
+  function historyError(error) {
+    if (runtimeProblem(error)) onRuntimeError(error);
   }
+  const historyUI = setupHistoryUI({
+    list: async () => extension ? (await command('DIAGNOSTICS', { action: 'list' })).sessions : demos.map(data => ({ ...data, id: data.sessionId })),
+    read: async id => extension ? (await command('DIAGNOSTICS', { action: 'read', sessionId: id, full: true })).diagnostics : demos.find(data => data.sessionId === id),
+    remove: async id => {
+      if (extension) await command('DIAGNOSTICS', { action: 'delete', sessionId: id });
+      else {
+        const index = demos.findIndex(data => data.sessionId === id);
+        if (index < 0) throw new Error('这份记录已不存在。');
+        if (demos[index].active) throw new Error('请先结束记录，再删除。');
+        demos.splice(index, 1);
+      }
+    },
+    download: exportSession, confirmDelete, onError: historyError,
+    onDeleted: async id => {
+      if (session?.sessionId === id) {
+        clearTimeout(noteTimer); session = null; demo = null;
+        noteSessionId = null; noteDraft = ''; noteDirty = false;
+        message('这份记录已删除。可以开始一份新记录。');
+      }
+      await refresh();
+    }
+  });
+  async function history() { return historyUI.refresh(); }
   async function run(fn) {
     if (!ready || busy) return;
     busy = true; render();
@@ -90,7 +107,7 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId,
   }
   function exportSession(data) {
     if (!data) throw new Error('还没有可以下载的记录。');
-    download(zip(recordingFiles(data)), `网页问题记录-${new Date(data.startedAt).toISOString().slice(0, 10)}-${data.sessionId.slice(0, 8)}.zip`);
+    download(zip(recordingFiles(data)), `网页问题记录-${localDateKey(data.startedAt)}-${data.sessionId.slice(0, 8)}.zip`);
     message('下载已发起。把 ZIP 文件发给维护人员即可；需要时也能再次下载。');
   }
   function demoEvent(category, kind, text, extra = {}) {
@@ -107,6 +124,7 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId,
       if (screenshots) await command('DIAGNOSTICS', { action: 'evidence' });
     } else {
       demo = { sessionId: crypto.randomUUID(), active: true, status: 'recording', scope: 'test-session', startedAt: new Date().toISOString(), stoppedAt: null, previewOnly: false, recordingVersion: 2, screenshots, note: '', counts: { actions: 0, feedback: 0, markers: 0, errors: 0 }, pages: [{ url: 'https://example.com/account' }], timeline: [], coverage: '界面演示数据，不是对当前网页的真实采集。' };
+      demos.unshift(demo);
       demoEvent('actions', 'click', '点击了“保存”'); demoEvent('feedback', 'page-message', '页面显示：保存失败，请稍后重试'); session = demo;
     }
     message(extension ? '已经开始。你可以回到网页操作，关闭侧边栏也会继续记录。' : '这是演示记录。真实记录需要在 Chrome 加载插件后使用。');
@@ -149,11 +167,21 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId,
       }
     }, 500);
   });
-  $('easy-history').addEventListener('click', () => run(async () => { $('easy-history-list').hidden = !$('easy-history-list').hidden; if (!$('easy-history-list').hidden) await history(); }));
-  $('show-advanced').addEventListener('click', () => { $('easy-view').hidden = true; $('advanced-view').hidden = false; document.body.classList.remove('simple-mode'); window.scrollTo(0, 0); });
-  $('back-to-simple').addEventListener('click', () => { $('easy-view').hidden = false; $('advanced-view').hidden = true; document.body.classList.add('simple-mode'); void refresh(); window.scrollTo(0, 0); });
+  $('easy-history').addEventListener('click', () => run(async () => {
+    const panel = $('history-panel'); panel.hidden = !panel.hidden;
+    $('easy-history').setAttribute('aria-expanded', String(!panel.hidden));
+    if (!panel.hidden) await history();
+  }));
   if (extension) chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.diagnosticSessionStatus) { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if (ready && !busy) void refresh().catch(() => {}); }, 500); }
+    if (area !== 'local') return;
+    if ('diagnosticSessionStatus' in changes) {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { if (ready && !busy) void refresh().catch(historyError); }, 300);
+    }
+    if ('diagnosticHistoryRevision' in changes) {
+      clearTimeout(historyTimer);
+      historyTimer = setTimeout(() => { if (ready && !$('history-panel').hidden) void history().catch(historyError); }, 300);
+    }
   });
   function setReady(value, reason = null) { ready = value; unavailable = reason; if (!ready) { clearTimeout(noteTimer); message(''); } render(); }
   render();

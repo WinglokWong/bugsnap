@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 — Easier recording history
+
+- Show 10 recordings per page with Previous, Next, and direct page navigation.
+- Search recording start dates by local year, month, or day.
+- Download or delete each saved recording, with confirmation and protection for active recordings.
+- Delete recording metadata and all associated events, screenshots, and notes in one IndexedDB transaction.
+- Synchronize recording history across open side panels.
+- Remove the advanced reporting, element-selection, annotation, and comparison interface and its unused clipboard permission.
+- Preserve existing recordings when upgrading.
+
+Validation: 72 automated tests passed; six real IndexedDB checks verified deletion, isolation, active-record protection, and rollback. A browser fixture exercised 31 records, direct navigation, date search, and last-page deletion. The installed extension retained existing history after reloading.
+
 ## 2.0.1 — Reliable startup after updates
 
 - Check the loaded manifest and background protocol before enabling recording.

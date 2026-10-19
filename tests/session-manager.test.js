@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSessionManager } from '../session-manager.js';
-import { diagnosticAttachment } from '../diagnostic-state.js';
 const clone = value => value === undefined ? undefined : structuredClone(value);
 function harness() {
   const sessions = new Map(), events = new Map(), local = {}, volatile = {}, hooks = {}, injections = [], registrations = [];
@@ -10,7 +9,13 @@ function harness() {
     get: async id => clone(sessions.get(id)), put: async s => { sessions.set(s.id, clone(s)); }, list: async () => [...sessions.values()].map(clone),
     append: async (s, e) => { const key = `${s.id}:${e.id}`; if (events.has(key)) return false; events.set(key, clone({ ...e, sessionId: s.id })); s.counts[e.category]++; sessions.set(s.id, clone(s)); return true; },
     events: async (id, limits) => { const all = [...events.values()].filter(e => e.sessionId === id); if (!limits) return clone(all); return clone(Object.keys(limits).flatMap(category => { const a = all.filter(e => e.category === category); return limits[category] ? a.slice(-limits[category]) : []; })); },
-    clear: async s => { for (const [key, e] of events) if (e.sessionId === s.id) events.delete(key); sessions.set(s.id, clone(s)); }
+    clear: async s => { for (const [key, e] of events) if (e.sessionId === s.id) events.delete(key); sessions.set(s.id, clone(s)); },
+    delete: async id => {
+      if (!sessions.has(id)) throw new Error('这条记录已不存在，请刷新列表。');
+      if (sessions.get(id).active) throw new Error('这条记录还在进行中，请先结束记录，再删除。');
+      for (const [key, e] of events) if (e.sessionId === id) events.delete(key);
+      sessions.delete(id);
+    }
   };
   const area = data => ({ get: async key => ({ [key]: clone(data[key]) }), set: async object => Object.assign(data, clone(object)) });
   const tab = { id: 5, windowId: 1, url: 'https://a.test/login' };
@@ -36,8 +41,6 @@ test('A session continues across origins and preserves each document until manua
   const read = await h.manager.command({ action: 'read', full: true });
   assert.equal(read.diagnostics.active, true); assert.equal(read.diagnostics.errors.length, 2); assert.equal(read.diagnostics.pages.length, 2);
   assert.deepEqual(read.diagnostics.errors.map(e => e.pageUrl), ['https://a.test/login', 'https://b.test/home']);
-  const capture = { tabId: 5, page: { url: h.tab.url, documentId: 'time-doc-b' } };
-  assert.equal(diagnosticAttachment(capture, read).ok, true);
   assert.equal(h.registrations[0].runAt, 'document_start');
 });
 test('Unrelated tabs and forged session/token/frame events cannot write records', async () => {
@@ -190,4 +193,106 @@ test('Simple mode does not adopt a reused window ID automatically after browser 
   const sender = { ...h.sender('after-restart'), tab: { ...h.tab, active: true } };
   assert.equal((await next.hello({ token: 'new-token', pageDocumentId: 'new-page' }, sender)).active, false);
   assert.deepEqual((await next.command({ action: 'read' })).diagnostics.tabIds, []);
+});
+test('Deleting an archived recording removes all evidence and leaves the active recording writable', async () => {
+  const h = harness(), old = await start(h); await h.hello(); await h.event(old.sessionId, 1);
+  await h.manager.command({ action: 'note', note: 'Old recording note' });
+  const oldSession = await h.db.get(old.sessionId);
+  await h.db.append(oldSession, { id: 'old-screenshot', category: 'evidence', entry: { image: 'data:image/jpeg;base64,AA==' } });
+  await h.manager.command({ action: 'stop' });
+  const current = await start(h); await h.hello('current'); await h.event(current.sessionId, 1, 'current');
+  const beforeStatus = clone(h.local.diagnosticSessionStatus), beforeHistory = h.local.diagnosticHistoryRevision;
+  assert.deepEqual(await h.manager.command({ action: 'delete', sessionId: old.sessionId }), { deleted: true, sessionId: old.sessionId });
+  assert.equal(await h.db.get(old.sessionId), undefined);
+  assert.deepEqual(await h.db.events(old.sessionId), []);
+  assert.equal((await h.manager.command({ action: 'read', sessionId: old.sessionId, full: true })).diagnostics, null);
+  assert.deepEqual((await h.manager.command({ action: 'list' })).sessions.map(s => s.id), [current.sessionId]);
+  assert.equal(h.local.diagnosticSessionId, current.sessionId);
+  assert.deepEqual(h.local.diagnosticSessionStatus, beforeStatus);
+  assert.equal(h.local.diagnosticHistoryRevision, beforeHistory + 1);
+  assert.equal((await h.event(current.sessionId, 2, 'current')).accepted, true);
+  const read = (await h.manager.command({ action: 'read', full: true })).diagnostics;
+  assert.equal(read.active, true); assert.equal(read.errors.length, 2);
+});
+test('Deleting the current stopped recording clears pointers and cannot resurrect it on later events or worker restart', async () => {
+  const h = harness(), { sessionId } = await start(h); await h.hello(); await h.event(sessionId, 1);
+  await h.manager.command({ action: 'stop' });
+  h.local.diagnosticSessionFault = { id: sessionId, message: 'Old failure', losses: {} };
+  await h.manager.command({ action: 'delete', sessionId });
+  assert.equal(h.local.diagnosticSessionId, null);
+  assert.equal(h.local.diagnosticSessionStatus, null);
+  assert.equal(h.local.diagnosticSessionFault, null);
+  assert.deepEqual((await h.manager.command({ action: 'list' })).sessions, []);
+  assert.equal((await h.manager.command({ action: 'read', full: true })).diagnostics, null);
+  assert.equal((await h.makeManager().command({ action: 'read' })).diagnostics, null);
+  assert.equal((await h.event(sessionId, 2)).accepted, false);
+  const next = await start(h); await h.hello('next');
+  assert.equal((await h.event(next.sessionId, 1, 'next')).accepted, true);
+});
+test('Deletion requires a concrete existing recording ID and never falls back to the current recording', async () => {
+  const h = harness(), { sessionId } = await start(h); await h.hello(); await h.event(sessionId, 1);
+  await h.manager.command({ action: 'stop' });
+  const revision = h.local.diagnosticHistoryRevision;
+  for (const invalid of [undefined, null, '', ' ', 123]) {
+    await assert.rejects(h.manager.command({ action: 'delete', sessionId: invalid }), /请选择要删除的记录/);
+  }
+  await assert.rejects(h.manager.command({ action: 'delete', sessionId: 'missing-id' }), /已不存在/);
+  assert.equal(h.local.diagnosticSessionId, sessionId);
+  assert.equal(h.local.diagnosticHistoryRevision, revision);
+  assert.equal((await h.manager.command({ action: 'read', full: true })).diagnostics.errors.length, 1);
+  await h.manager.command({ action: 'delete', sessionId });
+  await assert.rejects(h.manager.command({ action: 'delete', sessionId }), /已不存在/);
+});
+test('Deletion rejects any active recording, including one not referenced by the current pointer', async () => {
+  const h = harness(), { sessionId } = await start(h); await h.hello(); await h.event(sessionId, 1);
+  await assert.rejects(h.manager.command({ action: 'delete', sessionId }), /先结束记录/);
+  const extra = await h.db.get(sessionId); extra.id = 'other-active'; await h.db.put(extra);
+  await assert.rejects(h.manager.command({ action: 'delete', sessionId: extra.id }), /先结束记录/);
+  assert.equal((await h.event(sessionId, 2)).accepted, true);
+  assert.equal((await h.manager.command({ action: 'read', full: true })).diagnostics.errors.length, 2);
+  assert.equal(h.sessions.size, 2);
+});
+test('Deleting during stop cannot race the final buffered input or recreate a deleted recording', async () => {
+  const h = harness(), { sessionId } = await start(h); await h.hello();
+  let releaseDrain, signalDrain;
+  const draining = new Promise(resolve => { signalDrain = resolve; });
+  h.chrome.tabs.sendMessage = async (id, message) => {
+    if (message.type === 'SESSION_STOP') {
+      signalDrain(); await new Promise(resolve => { releaseDrain = resolve; });
+      await h.event(sessionId, 1);
+    }
+    return { ok: true };
+  };
+  const stopping = h.manager.command({ action: 'stop', sessionId });
+  await draining;
+  await assert.rejects(h.manager.command({ action: 'delete', sessionId }), /先结束记录/);
+  releaseDrain(); await stopping;
+  assert.equal((await h.manager.command({ action: 'read', full: true })).diagnostics.errors.length, 1);
+  await h.manager.command({ action: 'delete', sessionId });
+  assert.equal((await h.event(sessionId, 2)).accepted, false);
+  assert.deepEqual(await h.db.events(sessionId), []); assert.equal(h.sessions.size, 0);
+});
+test('A failed database deletion leaves the selected record and history state intact', async () => {
+  const h = harness(), { sessionId } = await start(h); await h.hello(); await h.event(sessionId, 1);
+  await h.manager.command({ action: 'stop' });
+  const status = clone(h.local.diagnosticSessionStatus), revision = h.local.diagnosticHistoryRevision;
+  h.db.delete = async () => { throw new Error('Database transaction aborted'); };
+  await assert.rejects(h.manager.command({ action: 'delete', sessionId }), /transaction aborted/);
+  assert.equal(h.local.diagnosticSessionId, sessionId);
+  assert.deepEqual(h.local.diagnosticSessionStatus, status);
+  assert.equal(h.local.diagnosticHistoryRevision, revision);
+  assert.equal((await h.manager.command({ action: 'read', full: true })).diagnostics.errors.length, 1);
+});
+test('History revision changes on creation and completion rather than on every recorded event', async () => {
+  const h = harness(), { sessionId } = await start(h), startedRevision = h.local.diagnosticHistoryRevision;
+  assert.equal(startedRevision, 1);
+  await h.hello(); await h.event(sessionId, 1); await h.event(sessionId, 2);
+  await h.manager.command({ action: 'note', note: 'Test' });
+  await h.manager.command({ action: 'join', windowId: 1 });
+  assert.equal(h.local.diagnosticHistoryRevision, startedRevision);
+  await h.manager.command({ action: 'stop' });
+  assert.equal(h.local.diagnosticHistoryRevision, startedRevision + 1);
+  await h.manager.command({ action: 'stop' });
+  assert.equal(h.local.diagnosticHistoryRevision, startedRevision + 1);
+  await start(h); assert.equal(h.local.diagnosticHistoryRevision, startedRevision + 2);
 });
