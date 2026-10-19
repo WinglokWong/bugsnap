@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.1 — Reliable startup after updates
+
+- Check the loaded manifest and background protocol before enabling recording.
+- Detect old/new extension files running together and show a persistent Chinese explanation with a Reload extension button.
+- Prevent undeclared permission requests and unsupported recording commands during a partial update.
+- Keep permission requests in the original button click so Chrome can show its consent prompt.
+- Preserve saved recordings during reload; no uninstall or data reset is needed.
+
+Validation: 74 logical tests and syntax checks passed. In an installed Chrome extension, reproduced the stale 1.2.0 manifest, used the new reload button to update to 2.0.1, approved the website permission prompt, then verified recording, JS errors, HTTP 404, markers, screenshots, cross-origin local navigation, and stop/export. The downloaded ZIP contained a complete stopped session with all screenshot references intact. These checks cover the local test pages; broader target-site acceptance is still required.
+
 ## 2.0.0 — Initial public release
 
 - Added simple mode with Start recording, Mark a problem, and Finish and export.

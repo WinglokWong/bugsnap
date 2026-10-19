@@ -4,8 +4,10 @@ import { groupByPage, pageKey } from './compare.js';
 import { setupEasyUI } from './easy-ui.js';
 import { setupComparison } from './comparison-ui.js';
 import { diagnosticAttachment, diagnosticSummary, shortPage } from './diagnostic-state.js';
+import { checkRuntime, assertLoadedManifest, permissionOrigins, runtimeProblem, RuntimeCompatibilityError } from './runtime-compat.js';
 const $ = id => document.getElementById(id);
 const extension = Boolean(globalThis.chrome?.runtime?.id);
+let runtimeReady = !extension, reloadRequired = false;
 const fields = ['title', 'description', 'steps', 'expected', 'actual'];
 let windowId = 'preview', draft, image, tool = 'rect', drawing, busy = false, toastTimer, draftTimer, pendingDelete, monitoring = null, diagnosticsBusy = false, sessionRefreshTimer;
 const fresh = () => ({ schemaVersion: 2, id: crypto.randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), title: '', description: '', steps: '', expected: '', actual: '', severity: 'medium', capture: null, annotations: [], requestId: null, includeDiagnostics: true, comparison: null });
@@ -14,6 +16,7 @@ const notify = (message, error = false) => {
   toastTimer = setTimeout(() => $('toast').hidden = true, error ? 9000 : 4000);
 };
 function friendly(error) {
+  if (runtimeProblem(error)) return runtimeProblem(error);
   const msg = error?.message || String(error);
   if (/Cannot access|Missing host permission|cannot be scripted|Extension manifest must request/i.test(msg)) return '请在目标网页点击一次 Chrome 工具栏中的 BugSnap 图标授权，然后重试。本地文件还需开启「允许访问文件网址」。';
   if (/Either.*activeTab|all_urls.*permission/i.test(msg)) return '日志会话仍在持续记录。当前标签页截图还需要临时权限，请点击顶部 BugSnap 图标后重新截图，无需重新开始会话。';
@@ -77,9 +80,16 @@ async function render() {
   fields.forEach(id => $(id).value = draft[id]); $('include-diagnostics').checked = draft.includeDiagnostics !== false; renderSeverity(); await renderCapture(); renderDiagnostics(); renderComparisonAttachment();
 }
 async function command(type, extra = {}) {
-  const result = await chrome.runtime.sendMessage({ type, windowId, ...extra });
-  if (!result?.ok) throw new Error(result?.error || '无法连接采集服务，请重新加载扩展。');
-  return result;
+  try {
+    if (!runtimeReady) throw reloadRequired ? new RuntimeCompatibilityError() : new Error('记录服务尚未准备好，请重试。');
+    assertLoadedManifest(chrome.runtime.getManifest());
+    const result = await chrome.runtime.sendMessage({ type, windowId, ...extra });
+    if (!result?.ok) throw new Error(result?.error || '无法连接采集服务，请重新加载扩展。');
+    return result;
+  } catch (error) {
+    if (runtimeProblem(error)) startupFailure(error);
+    throw error;
+  }
 }
 async function consume(result) {
   if (!result || result.requestId !== draft.requestId) return;
@@ -240,7 +250,11 @@ async function demoCapture(requestId) {
   return { requestId, diagnostics: monitoring?.diagnostics || null, screenshot: canvas.toDataURL('image/png'), page: { title: '示例登录页面（预览数据）', url: 'https://example.com/login', capturedAt: new Date().toISOString(), browser: navigator.userAgent, platform: navigator.platform, screen: { width: screen.width, height: screen.height }, window: { width: 1440, height: 900 }, viewport: { width: 1200, height: 750 }, devicePixelRatio: 1, scroll: { x: 0, y: 0 } }, element: { selector: 'button.login-submit', tag: 'button', text: 'Sign in', attributes: { class: 'login-submit', type: 'submit' }, rect: { x: 440, y: 458, width: 320, height: 52 } } };
 }
 async function init() {
-  if (extension) windowId = (await chrome.windows.getCurrent()).id;
+  if (extension) {
+    await checkRuntime(chrome);
+    runtimeReady = true;
+    windowId = (await chrome.windows.getCurrent()).id;
+  }
   else $('demo-banner').hidden = false;
   draft = { ...fresh(), ...((await store('drafts', 'get', String(windowId))) || {}), schemaVersion: 2 };
   monitoring = (await store('drafts', 'get', `diagnostics:${windowId}`)) || null;
@@ -252,11 +266,12 @@ async function init() {
     await diagnosticAction('read', true);
     await refreshSessionHistory();
     chrome.storage.onChanged.addListener((changes, area) => {
+      if (!runtimeReady) return;
       if (area === 'local' && changes.diagnosticSessionStatus?.newValue) {
         const status = changes.diagnosticSessionStatus.newValue;
         if (status.error) diagnosticFeedback(status.error, true);
         if (!monitoring?.sessionId || monitoring.sessionId === status.id) {
-          clearTimeout(sessionRefreshTimer); sessionRefreshTimer = setTimeout(() => { if (!diagnosticsBusy) diagnosticAction('read', true).catch(error => diagnosticFeedback(friendly(error), true)); }, 500);
+          clearTimeout(sessionRefreshTimer); sessionRefreshTimer = setTimeout(() => { if (runtimeReady && !diagnosticsBusy) diagnosticAction('read', true).catch(error => diagnosticFeedback(friendly(error), true)); }, 500);
         }
       }
       if (area === 'session' && changes[`capture:${windowId}`]?.newValue) consume(changes[`capture:${windowId}`].newValue).catch(error => notify(friendly(error), true));
@@ -269,6 +284,8 @@ async function init() {
       else { draft.requestId = null; touch(); }
     }
   }
+  $('advanced-view').inert = false;
+  easyUI.setReady(true);
 }
 const comparisonUI = setupComparison({
   getReports: async () => (await store('reports', 'getAll')).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), getDraft: () => draft,
@@ -339,7 +356,7 @@ async function diagnosticAction(action, quiet = false) {
   if (extension) {
     // The permission request is called immediately from the start button's user gesture.
     if (action === 'start' || action === 'join') {
-      const granted = await chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
+      const granted = await chrome.permissions.request({ origins: permissionOrigins(chrome, false) });
       if (!granted) throw new Error('没有获得网站访问权限，未开启跨页记录。可再次点击开始并选择授权。');
     }
     monitoring = await command('DIAGNOSTICS', { action, ...(['stop', 'clear'].includes(action) ? { sessionId: monitoring?.sessionId } : {}) });
@@ -398,5 +415,23 @@ $('diagnostics-history').addEventListener('change', async () => {
     renderDiagnostics(); await persistMonitoring(); diagnosticFeedback('已切换会话。查看历史会话不会停止当前运行中的会话。');
   } catch (error) { diagnosticFeedback(friendly(error), true); }
 });
-const easyUI = setupEasyUI({ extension, command, download, notify, getWindowId: () => windowId });
-init().catch(error => { draft ||= fresh(); notify(`初始化失败：${friendly(error)}`, true); });
+function startupFailure(error) {
+  runtimeReady = false;
+  reloadRequired = Boolean(runtimeProblem(error));
+  clearTimeout(sessionRefreshTimer);
+  easyUI.setReady(false, { title: reloadRequired ? '重新加载后就能开始' : '记录尚未准备好' });
+  $('advanced-view').inert = true;
+  $('runtime-notice').hidden = false;
+  $('runtime-title').textContent = reloadRequired ? '更新还差一步' : '暂时无法准备记录';
+  $('runtime-message').textContent = friendly(error);
+  $('runtime-help').textContent = reloadRequired ? '已保存的记录会保留。重新加载后，点击工具栏中的 BugSnap 图标打开，再开始记录。' : '已保存的记录不会被删除。请重试；仍无法使用时，将这条提示发给维护人员。';
+  $('runtime-reload').textContent = reloadRequired ? '重新加载插件' : '重试';
+}
+$('runtime-reload').addEventListener('click', () => {
+  if (extension && reloadRequired) {
+    try { chrome.runtime.reload(); }
+    catch { $('runtime-help').textContent = '请打开 chrome://extensions，找到 BugSnap，点击重新加载按钮，再打开侧边栏。'; }
+  } else location.reload();
+});
+const easyUI = setupEasyUI({ extension, command, download, notify, getWindowId: () => windowId, onRuntimeError: startupFailure });
+init().catch(error => { draft ||= fresh(); startupFailure(error); });

@@ -39,7 +39,7 @@ The corresponding interface labels are:
 
 Requires **Chrome 116 or newer**. The release is an unpacked extension package, not a Chrome Web Store installation.
 
-1. Download `BugSnap-v2.0.0.zip` from [Releases](https://github.com/WinglokWong/bugsnap/releases).
+1. Download `BugSnap-v2.0.1.zip` from [Releases](https://github.com/WinglokWong/bugsnap/releases).
 2. Extract the ZIP.
 3. Open `chrome://extensions` in Chrome and enable **Developer mode**.
 4. Click **Load unpacked** and select the extracted `bugsnap` folder containing `manifest.json`.
@@ -50,6 +50,8 @@ An administrator or support person can handle installation once; end users can t
 ### Update an existing installation
 
 Export any recordings you want to keep before updating. Replace the extension files in the same installation folder, click **Reload** on its card in `chrome://extensions`, and reopen the side panel.
+
+Replacing files alone does not update Chrome's loaded permissions or background worker. If the sidebar says **更新还差一步** (One more update step), click **重新加载插件** (Reload extension), then reopen BugSnap from the toolbar. Saved records are retained; an active recording may need to be resumed. Do not remove and reinstall the extension to resolve this.
 
 If an older recording is still running, finish it before starting a new v2 recording. Older sessions retain their original diagnostic scope rather than silently enabling additional collection.
 
@@ -193,7 +195,7 @@ npm run build
 Outputs:
 
 ```text
-dist/BugSnap-v2.0.0.zip
+dist/BugSnap-v2.0.1.zip
 dist/SHA256SUMS
 ```
 

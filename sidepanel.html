@@ -5,11 +5,12 @@
 <div class="app">
 <header class="app-header"><a class="brand" href="sidepanel.html" aria-label="BugSnap 首页"><img src="icons/48.png" alt=""><span>BugSnap<small>让问题，一目了然</small></span></a><span class="local"><i></i>本地模式</span></header>
 <div id="demo-banner" class="demo-banner" hidden>界面预览模式 · 真实网页采集需加载 Chrome 扩展</div>
+<section id="runtime-notice" class="runtime-notice" role="alert" hidden><h2 id="runtime-title"></h2><p id="runtime-message"></p><button id="runtime-reload" class="easy-primary">重新加载插件</button><p id="runtime-help" class="runtime-help"></p></section>
 <section id="easy-view" class="easy-view">
   <div class="easy-intro"><span class="easy-eyebrow">网页遇到问题？</span><h1>照常操作，<br>我们帮你记下来。</h1><p>把发生了什么，清楚地交给维护人员。</p></div>
   <ol class="easy-steps" aria-label="使用步骤"><li><b>1</b>开始记录</li><li><b>2</b>遇到问题就标记</li><li><b>3</b>结束后发文件</li></ol>
   <section id="easy-status" class="easy-status" aria-live="polite"><span class="easy-indicator" aria-hidden="true"></span><div><h2 id="easy-status-title">把问题发生的过程留下来</h2><p id="easy-status-detail">不需要懂技术。开始后，照平时的方式使用网页就好。</p></div></section>
-  <div class="easy-buttons"><button id="easy-start" class="easy-primary">开始记录</button><button id="easy-mark" class="easy-mark" disabled><span aria-hidden="true">⚑</span> 这里有问题</button><button id="easy-end" class="easy-end" disabled>结束并导出</button></div>
+  <div class="easy-buttons"><button id="easy-start" class="easy-primary" disabled>开始记录</button><button id="easy-mark" class="easy-mark" disabled><span aria-hidden="true">⚑</span> 这里有问题</button><button id="easy-end" class="easy-end" disabled>结束并导出</button></div>
   <button id="easy-continue" class="easy-primary" hidden>继续记录这个网页</button>
   <div id="easy-message" class="easy-message" role="status" aria-live="polite" hidden></div>
   <div class="easy-privacy"><label><input id="easy-screenshots" type="checkbox" checked>同时保存开始、标记和结束时的画面</label><p>输入原文不写入文字日志；画面可能包含个人信息。首次需允许浏览器访问网站。记录此窗口及由它打开的页面，关闭侧边栏也会继续。</p></div>
@@ -20,7 +21,7 @@
   <div id="easy-history-list" class="easy-history-list" hidden></div>
   <p class="easy-local-note">记录保存在这台电脑上。导出后，由你发送给维护人员。</p>
 </section>
-<div id="advanced-view" hidden><button id="back-to-simple" class="back-to-simple">← 返回简单模式</button>
+<div id="advanced-view" hidden inert><button id="back-to-simple" class="back-to-simple">← 返回简单模式</button>
 <nav class="tabs" aria-label="工作区"><button class="tab active" id="tab-edit" aria-selected="true">＋ 新建反馈</button><button class="tab" id="tab-history" aria-selected="false">◷ 历史记录 <span id="history-count">0</span></button><button class="tab" id="tab-compare" aria-selected="false">◫ 截图对比</button></nav>
 <main>
 <section id="editor">

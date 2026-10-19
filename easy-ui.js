@@ -1,8 +1,10 @@
 import { recordingFiles } from './recording-report.js';
 import { zip } from './report.js';
+import { permissionOrigins, runtimeProblem } from './runtime-compat.js';
 const $ = id => document.getElementById(id);
 const names = { actions: '操作', feedback: '页面提示', navigation: '打开网页', network: '请求结果', requests: '请求失败', errors: '系统异常', markers: '问题标记', evidence: '画面' };
-export function setupEasyUI({ extension, command, download, notify, getWindowId }) {
+export function setupEasyUI({ extension, command, download, notify, getWindowId, onRuntimeError }) {
+  let ready = false, unavailable = null;
   let session = null, running = false, busy = false, refreshTimer, noteTimer, demo = null, noteDraft = '', noteSessionId = null, noteDirty = false;
   function message(text, error = false) { $('easy-message').textContent = text; $('easy-message').classList.toggle('error', error); $('easy-message').hidden = !text; }
   function render() {
@@ -13,14 +15,20 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId 
     $('easy-status-title').textContent = legacy ? '请先结束旧版记录' : waiting ? '有网页暂时没有记录' : running ? '正在记录，你可以正常浏览' : session ? '记录已结束' : '把问题发生的过程留下来';
     $('easy-status-detail').textContent = legacy ? '旧记录只包含原来的诊断信息。结束并导出后，开始一份新记录，就能自动记录操作和页面反馈。' : otherWindow ? '这份记录在另一个窗口中进行。点击下面的按钮，可继续记录这个窗口的网页。' : waiting ? session.lastError || '回到要反馈的网页，点击下面的按钮继续。' : running ? '遇到不对劲的地方，点一下“这里有问题”。' : session ? '将导出的 ZIP 文件发给开发或维护人员即可。' : '不需要懂技术。开始后，照平时的方式使用网页就好。';
     $('easy-status').classList.toggle('recording', running && !waiting); $('easy-status').classList.toggle('waiting', waiting);
+    if (!ready) {
+      $('easy-status-title').textContent = unavailable?.title || '正在准备记录…';
+      $('easy-status-detail').textContent = unavailable ? '请先处理上方的提示。' : '正在检查插件，准备好后就能开始。';
+      $('easy-status').classList.remove('recording', 'waiting');
+    }
     $('easy-start').hidden = running;
     $('easy-start').textContent = session ? '开始一份新记录' : '开始记录';
-    $('easy-start').disabled = busy;
-    $('easy-mark').disabled = busy || !running || legacy;
-    $('easy-end').disabled = busy || !session;
+    $('easy-start').disabled = !ready || busy;
+    $('easy-mark').disabled = !ready || busy || !running || legacy;
+    $('easy-end').disabled = !ready || busy || !session;
     $('easy-end').textContent = running ? '结束并导出' : session ? '再次下载记录' : '结束并导出';
-    $('easy-continue').hidden = !waiting || legacy; $('easy-continue').disabled = busy;
-    $('easy-screenshots').disabled = running || busy;
+    $('easy-continue').hidden = !waiting || legacy; $('easy-continue').disabled = !ready || busy;
+    $('easy-screenshots').disabled = !ready || running || busy;
+    $('easy-note').disabled = !ready || busy;
     if (running && typeof session.screenshots === 'boolean') $('easy-screenshots').checked = session.screenshots;
     $('easy-count-actions').textContent = session?.counts?.actions || 0;
     $('easy-count-feedback').textContent = session?.counts?.feedback || 0;
@@ -37,7 +45,8 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId 
       content.append(title, meta); item.append(icon, content); $('easy-timeline').append(item);
     }
     $('easy-recent').hidden = !recent.length;
-    $('easy-history').disabled = busy;
+    $('easy-history').disabled = !ready || busy;
+    $('show-advanced').disabled = !ready;
   }
   async function refresh() {
     if (extension) session = (await command('DIAGNOSTICS', { action: 'read' })).diagnostics;
@@ -59,11 +68,14 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId 
     if (!sessions.length) $('easy-history-list').textContent = '保存后的记录会出现在这里。';
   }
   async function run(fn) {
-    if (busy) return;
+    if (!ready || busy) return;
     busy = true; render();
     try { await fn(); }
-    catch (error) { message(error.message || '暂时没有完成，请重试。', true); }
-    finally { busy = false; await refresh().catch(() => {}); render(); }
+    catch (error) {
+      if (runtimeProblem(error)) onRuntimeError(error);
+      else message(error.message || '暂时没有完成，请重试。', true);
+    }
+    finally { busy = false; if (ready) await refresh().catch(() => {}); render(); }
   }
   function demoPicture() {
     const canvas = document.createElement('canvas'); canvas.width = 1000; canvas.height = 620;
@@ -89,7 +101,7 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId 
     const screenshots = $('easy-screenshots').checked;
     if (extension) {
       // Must be invoked before any await, while the click's user gesture is active.
-      const granted = await chrome.permissions.request({ origins: screenshots ? ['<all_urls>'] : ['http://*/*', 'https://*/*'] });
+      const granted = await chrome.permissions.request({ origins: permissionOrigins(chrome, screenshots) });
       if (!granted) throw new Error('还没有得到浏览器允许。请再次点击“开始记录”，并在浏览器提示里选择允许。');
       session = (await command('DIAGNOSTICS', { action: 'start', followActive: true, screenshots })).diagnostics;
       if (screenshots) await command('DIAGNOSTICS', { action: 'evidence' });
@@ -118,17 +130,18 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId 
   }));
   $('easy-continue').addEventListener('click', () => run(async () => {
     if (extension) {
-      const granted = await chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
+      const granted = await chrome.permissions.request({ origins: permissionOrigins(chrome, false) });
       if (!granted) throw new Error('浏览器还没有允许记录这个网页。');
       await command('DIAGNOSTICS', { action: 'join', followActive: true });
     }
     message('已尝试继续记录当前网页。');
   }));
   $('easy-note').addEventListener('input', () => {
+    if (!ready) return;
     noteDraft = $('easy-note').value; noteDirty = true;
     if (session) session.note = noteDraft;
     clearTimeout(noteTimer); noteTimer = setTimeout(() => {
-      if (extension && session) {
+      if (ready && extension && session) {
         const id = session.sessionId, text = noteDraft;
         command('DIAGNOSTICS', { action: 'note', sessionId: id, note: text }).then(() => {
           if (session?.sessionId === id && noteDraft === text) noteDirty = false;
@@ -140,7 +153,9 @@ export function setupEasyUI({ extension, command, download, notify, getWindowId 
   $('show-advanced').addEventListener('click', () => { $('easy-view').hidden = true; $('advanced-view').hidden = false; document.body.classList.remove('simple-mode'); window.scrollTo(0, 0); });
   $('back-to-simple').addEventListener('click', () => { $('easy-view').hidden = false; $('advanced-view').hidden = true; document.body.classList.add('simple-mode'); void refresh(); window.scrollTo(0, 0); });
   if (extension) chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.diagnosticSessionStatus) { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if (!busy) void refresh().catch(() => {}); }, 500); }
+    if (area === 'local' && changes.diagnosticSessionStatus) { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if (ready && !busy) void refresh().catch(() => {}); }, 500); }
   });
-  return { refresh, history };
+  function setReady(value, reason = null) { ready = value; unavailable = reason; if (!ready) { clearTimeout(noteTimer); message(''); } render(); }
+  render();
+  return { refresh, history, setReady };
 }

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
-const source = (await readFile(new URL('../background.js', import.meta.url), 'utf8')).replace(/^import .*;\n/, '');
+import { UI_VERSION, RUNTIME_PROTOCOL } from '../runtime-compat.js';
+const source = (await readFile(new URL('../background.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '');
 function setup() {
   let listener; const data = {}, events = {}, captureCalls = [];
   const tab = { id: 5, windowId: 1, url: 'https://example.com/', status: 'complete' };
@@ -18,13 +19,23 @@ function setup() {
   for (const event of ['onActivated', 'onUpdated', 'onRemoved']) chrome.tabs[event] = { addListener: fn => events[event] = fn };
   chrome.windows.onRemoved = { addListener: () => {} };
   const sessionMock = { install() {}, forCapture: async () => null, command: async () => ({ diagnostics: null }), hello: async () => ({ active: false }), append: async () => ({ accepted: false }) };
-  vm.runInNewContext(source, { chrome, console, createSessionManager: () => sessionMock });
+  vm.runInNewContext(source, { chrome, console, UI_VERSION, RUNTIME_PROTOCOL, createSessionManager: () => sessionMock });
   const send = (message, sender = { url: 'chrome-extension://test/sidepanel.html' }) => new Promise(resolve => listener(message, sender, resolve));
   return { send, tab, data, chrome, captureCalls, events, sessionMock };
 }
 test('Capture returns metadata and screenshot for the active authorized tab', async () => {
   const h = setup(); const result = await h.send({ type: 'CAPTURE', windowId: 1, requestId: 'a' });
   assert.equal(result.ok, true); assert.equal(result.result.tabId, 5); assert.equal(result.result.requestId, 'a'); assert.equal(h.captureCalls.length, 1);
+});
+test('Runtime handshake identifies the worker code and rejects page callers', async () => {
+  const h = setup(); let commands = 0;
+  h.sessionMock.command = async () => { commands++; };
+  const result = await h.send({ type: 'RUNTIME_INFO' });
+  assert.equal(result.ok, true);
+  assert.equal(result.runtime.version, UI_VERSION);
+  assert.equal(result.runtime.protocol, RUNTIME_PROTOCOL);
+  assert.equal(commands, 0);
+  assert.equal((await h.send({ type: 'RUNTIME_INFO' }, { tab: h.tab, url: h.tab.url })).ok, false);
 });
 test('Rejects privileged pages and commands from content scripts', async () => {
   const h = setup(); h.tab.url = 'chrome://settings';

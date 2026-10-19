@@ -1,4 +1,5 @@
 import { createSessionManager } from './session-manager.js';
+import { UI_VERSION, RUNTIME_PROTOCOL } from './runtime-compat.js';
 const sessions = createSessionManager(chrome);
 sessions.install();
 // Route the toolbar click through the extension action so Chrome grants activeTab.
@@ -46,6 +47,7 @@ async function handle(message, sender) {
   }
   // Page content scripts may only submit selection results, never command captures.
   if (sender.tab || !sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('不受支持的请求来源。');
+  if (message.type === 'RUNTIME_INFO') return { ok: true, runtime: { version: UI_VERSION, protocol: RUNTIME_PROTOCOL } };
   if (message.type === 'DIAGNOSTICS') return { ok: true, ...(await sessions.command(message)) };
   if (message.type === 'CANCEL') {
     const requestKey = `pick:${message.windowId}`;
