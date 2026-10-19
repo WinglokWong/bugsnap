@@ -19,7 +19,7 @@ def main():
     if not re.fullmatch(r'\d+(?:\.\d+){1,3}', version):
         raise ValueError('Unexpected manifest version')
 
-    names = {'manifest.json', 'sidepanel.html', 'styles.css', 'README.md', 'CHANGELOG.md', 'docs/simple-mode.png'}
+    names = {'manifest.json', 'sidepanel.html', 'styles.css', 'README.md', 'CHANGELOG.md', 'docs/simple-mode.jpg'}
     names.update(p.name for p in ROOT.glob('*.js') if not p.name.startswith('test-'))
     names.update(p.relative_to(ROOT).as_posix() for p in (ROOT / 'icons').glob('*.png'))
     for name in names:

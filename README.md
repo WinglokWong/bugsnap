@@ -8,7 +8,13 @@ BugSnap is a Chrome Manifest V3 extension for collecting user actions, visible p
 
 > The current extension interface is in Simplified Chinese. This README provides English installation and usage instructions.
 
-![BugSnap simple-mode preview](docs/simple-mode.png)
+<p align="center">
+  <a href="docs/simple-mode.jpg">
+    <img src="docs/simple-mode.jpg" alt="BugSnap simple mode — complete sidebar preview" width="480">
+  </a>
+</p>
+
+<p align="center"><em>Complete simple-mode preview. Click the image to view it at full size.</em></p>
 
 ## Three steps for users
 
